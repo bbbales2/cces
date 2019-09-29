@@ -88,14 +88,23 @@ state_lookup = list("01" = "Alabama",
 #8 .Some Other Race alone
 #9 .Two or More Races
 
+#MAR 1
+#Marital status
+#1 .Married
+#2 .Widowed
+#3 .Divorced
+#4 .Separated
+#5 .Never married or under 15 years old
+
 df2 = df %>%
-  select(SEX, ST, RAC1P, SCHL, AGEP, HISP, PWGTP) %>%
+  select(SEX, ST, RAC1P, SCHL, AGEP, HISP, MAR, PWGTP) %>%
   rename(sex = SEX,
          state = ST,
          race = RAC1P,
          educ = SCHL,
          age = AGEP,
          hispanic = HISP,
+         marstat = MAR,
          weight = PWGTP) %>%
   mutate(educ = as.integer(educ),
          hispanic = as.integer(hispanic),
@@ -112,10 +121,9 @@ df3 = df2 %>%
     if(is.na(x)) { return("unknown") }
     if(x <= 11) { return("noHS") }
     if(x <= 17) { return("HS") }
-    if(x <= 19) { return("some") }
-    if(x == 20) { return("assoc") }
+    if(x <= 20) { return("some_or_assoc") }
     if(x == 21) { return("bach") }
-    return("bachp")
+    return("bachplus")
     }),
     race = map2(race, hispanic, function(race, hispanic) {
       if(hispanic != 1) { return("hispanic") }
@@ -131,6 +139,11 @@ df3 = df2 %>%
       if(x <= 44) { return("30-44") }
       if(x <= 64) { return("45-64") }
       return("65+")
+    }),
+    marstat = sapply(marstat, function(x) {
+      if(x == 1) { return("married") }
+      if(x == 5) { return("never married") }
+      return("previously married")
     })) %>%
   filter(state != "Puerto Rico") %>%
   unnest() %>%
@@ -139,6 +152,6 @@ df3 = df2 %>%
 write_delim(df3, "full_pums_data.delim")
 
 write_delim(df3 %>%
-              group_by(sex, state, educ, age, race) %>%
+              group_by(sex, state, educ, age, race, marstat) %>%
               summarize(N = sum(weight)),
             "poststrat_table.delim")
