@@ -101,7 +101,8 @@ tfit = brm(turned_out | trials(N) ~ male +
            cores = 4,
            prior = set_prior("normal(0, 1)", class = "b") +
              set_prior("normal(0, 1)", class = "Intercept") +
-             set_prior("normal(0, 1)", class = "sd"))
+             set_prior("normal(0, 1)", class = "sd"),
+           control = list(adapt_delta = 0.9))
 
 tpredicted = fitted(tfit, newdata = pums, allow_new_levels = TRUE)
 tpredicted_d = fitted(tfit, newdata = pums, allow_new_levels = TRUE, summary = FALSE)
@@ -118,7 +119,8 @@ fit = brm(votes | trials(N) ~ male +
           cores = 4,
           prior = set_prior("normal(0, 1)", class = "b") +
             set_prior("normal(0, 1)", class = "Intercept") +
-            set_prior("normal(0, 1)", class = "sd"))
+            set_prior("normal(0, 1)", class = "sd"),
+          control = list(adapt_delta = 0.9))
 
 predicted = fitted(fit, newdata = pums, allow_new_levels = TRUE)
 predicted_d = fitted(fit, newdata = pums, allow_new_levels = TRUE, summary = FALSE)
@@ -151,25 +153,28 @@ gender_gap = function(df, outcome, gap_column_name) {
     select(-`0.5`, -`-0.5`)
 }
 
-lapply(1:3, function(i) {
-  pums %>%
-    mutate(predicted = (predicted_d[i, ] / N) * (tpredicted_d[sample(1:nrow(tpredicted_d), 1), ] / N)) %>%
-    pstrat(predicted, state, male) %>%
-    gender_gap(predicted, gap) %>%
-    mutate(rep = i)
-}) %>%
-  bind_rows
-i = 1
-pums %>%
-  mutate(predicted = (predicted_d[i, ] / N) * (tpredicted_d[sample(1:nrow(tpredicted_d), 1), ] / N)) %>%
-  pstrat(predicted, state, male) %>%
+map_tibble = us_map() %>%
+  mutate(long = x,
+         lat = y,
+         region = fips) %>%
+  as_tibble()
+
+p = tpredicted_d[sample(1:nrow(tpredicted_d), 25), ] %>% t %>%
+  as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%
+  bind_cols(pums) %>%
+  pivot_longer(starts_with("predicted_"), names_to = c("rep"), names_pattern = "predicted_([0-9]+)", values_to = "predicted") %>%
+  mutate(predicted = predicted / N) %>%
+  pstrat(predicted, state, male, educ, age, rep) %>%
   gender_gap(predicted, gap) %>%
-  mutate(rep = i) %>%
-  rename(region = state) %>%
-  full_join(usa, by = "region") %>%
+  mutate(region = fips(state)) %>%
   ggplot() +
-  geom_polygon(aes(x = long, y = lat, group = group, fill = gap), color = "gray90", size = 0.1) +
-  coord_map(projection = "albers", lat0 = 39, lat1 = 45) +
+  geom_map(map = map_tibble,
+           aes(map_id = region, fill = gap), color = "#000000", size = 0.15) +
+  coord_equal() +
+  expand_limits(map_tibble) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.0) +
+  theme_grey(base_size = 18) +
+  facet_grid(educ ~ age) +
   theme(panel.grid.major = element_blank(),
         panel.background = element_blank(),
         axis.title.x = element_blank(),
@@ -178,7 +183,81 @@ pums %>%
         axis.title.y = element_blank(),
         axis.text.y = element_blank(),
         axis.ticks.y = element_blank()) +
-  ggtitle("Using CCES 2016 MRP'd on ACS 2016\n Gender gap (male - female) of mean probability of voting Trump")
+  ggtitle("Using CCES 2016 MRP'd on ACS 2016\n 25 samples of gender gap of p(turned_out)") +
+  transition_manual(rep)
+
+animate(p, fps = 5, height = 1080, width = 1920)
+anim_save("gender_gap_map_turnout.gif")
+
+p = predicted_d[sample(1:nrow(predicted_d), 25), ] %>% t %>%
+  as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%
+  bind_cols(pums) %>%
+  pivot_longer(starts_with("predicted_"), names_to = c("rep"), names_pattern = "predicted_([0-9]+)", values_to = "predicted") %>%
+  mutate(predicted = predicted / N) %>%
+  pstrat(predicted, state, male, educ, age, rep) %>%
+  gender_gap(predicted, gap) %>%
+  mutate(region = fips(state)) %>%
+  ggplot() +
+  geom_map(map = map_tibble,
+           aes(map_id = region, fill = gap), color = "#000000", size = 0.15) +
+  coord_equal() +
+  expand_limits(map_tibble) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.0) +
+  theme_grey(base_size = 18) +
+  facet_grid(educ ~ age) +
+  theme(panel.grid.major = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  ggtitle("Using CCES 2016 MRP'd on ACS 2016\n 25 samples of gender gap of p(trump | turned_out)") +
+  transition_manual(rep)
+
+animate(p, fps = 5, height = 1080, width = 1920)
+anim_save("gender_gap_map_voting.gif")
+
+p = left_join(predicted_d[sample(1:nrow(predicted_d), 25), ] %>% t %>%
+            as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%
+            bind_cols(pums) %>%
+            pivot_longer(starts_with("predicted_"),
+                         names_to = c("rep"),
+                         names_pattern = "predicted_([0-9]+)",
+                         values_to = "predicted_vote"),
+          tpredicted_d[sample(1:nrow(tpredicted_d), 25), ] %>% t %>%
+            as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%
+            bind_cols(pums) %>%
+            pivot_longer(starts_with("predicted_"),
+                         names_to = c("rep"),
+                         names_pattern = "predicted_([0-9]+)",
+                         values_to = "predicted_turnout")) %>%
+  mutate(predicted = predicted_vote / N * predicted_turnout / N) %>%
+  pstrat(predicted, state, male, educ, age, rep) %>%
+  gender_gap(predicted, gap) %>%
+  mutate(region = fips(state)) %>%
+  ggplot() +
+  geom_map(map = map_tibble,
+           aes(map_id = region, fill = gap), color = "#000000", size = 0.15) +
+  coord_equal() +
+  expand_limits(map_tibble) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.0) +
+  theme_grey(base_size = 18) +
+  facet_grid(educ ~ age) +
+  theme(panel.grid.major = element_blank(),
+        panel.background = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  ggtitle("Using CCES 2016 MRP'd on ACS 2016\n 25 samples of gender gap of p(trump | turned_out) * p(turned_out)") +
+  transition_manual(rep)
+
+animate(p, fps = 5, height = 1080, width = 1920)
+anim_save("gender_gap_map_combined.gif")
 
 pums %>%
   mutate(predicted = tpredicted[, "Estimate"] / N) %>%
@@ -286,7 +365,7 @@ mclapply(sample(1:nrow(predicted_d), 400), function(i) {
         axis.text.y = element_blank(),
         axis.ticks.y = element_blank()) +
   ggtitle("Using CCES 2016 MRP'd on ACS 2016\n Gender gap of E[p(trump|turned_out)] * E[p(turned_out)]")
-ggsave("gender_gap_map_combined.png", width = 12, height = 6, dpi = 300)
+#ggsave("gender_gap_map_combined.png", width = 12, height = 6, dpi = 300)
 
 bind_rows(mclapply(sample(1:nrow(predicted_d), 400), function(i) {
   pums %>%
@@ -320,7 +399,7 @@ mclapply(sample(1:nrow(predicted_d), 400), function(i) {
   ggtitle("Gender gap in probability of voting for Trump\n 10<->90 quantiles + medians plotted") +
   theme_grey(base_size = 18) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
-ggsave("gender_gap_age_educ_turnout.png", width = 12, height = 6, dpi = 300)
+#ggsave("gender_gap_age_educ_turnout.png", width = 12, height = 6, dpi = 300)
 
 bind_rows(mclapply(sample(1:nrow(predicted_d), 400), function(i) {
   pums %>%
@@ -357,7 +436,7 @@ mclapply(sample(1:nrow(predicted_d), 400), function(i) {
   ggtitle("Gender gap in probability of voting for Trump\n 10<->90 quantiles + medians plotted") +
   theme_grey(base_size = 18) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
-ggsave("gender_gap_age_turnout.png", width = 12, height = 6, dpi = 300)
+#ggsave("gender_gap_age_turnout.png", width = 12, height = 6, dpi = 300)
 
 save.image(file = "positive_gender_gap.RData")
 load("positive_gender_gap.RData")
