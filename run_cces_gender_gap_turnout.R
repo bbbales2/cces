@@ -172,11 +172,16 @@ map_tibble = us_map() %>%
 write_delim(pums %>%
               mutate(predicted = tpredicted[, "Estimate"] / N), "pums_turnout_predictions.delim")
 
-write_delim(tpredicted_d[sample(1:nrow(tpredicted_d), 20), ] %>% t %>%
+tpdf = tpredicted_d[sample(1:nrow(tpredicted_d), 20), ] %>% t %>%
   as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%
   bind_cols(pums) %>%
   pivot_longer(starts_with("predicted_"), names_to = c("rep"), names_pattern = "predicted_([0-9]+)", values_to = "predicted") %>%
-  mutate(predicted = predicted / N), "pums_turnout_predictions.delim")
+  mutate(predicted = predicted / N)
+
+write_delim(bind_rows(tpdf %>% mutate(time = 2011),
+                      tpdf %>% mutate(time = 2012),
+                      tpdf %>% mutate(time = 2013)),
+            "pums_turnout_predictions.delim")
 
 p = tpredicted_d[sample(1:nrow(tpredicted_d), 25), ] %>% t %>%
   as_tibble(.name_repair = function(cols) { paste0("predicted_", 1:length(cols)) }) %>%

@@ -17,8 +17,9 @@ map_tibble = us_map() %>%
            region = fips) %>%
     as_tibble()
 
-turnout_df = read_delim("pums_turnout_predictions.delim", delim = " ") %>%
-    mutate(sex = sapply(male, function(x) if(x == 0.5) "male" else "female"))
+prediction_df = read_delim("basic.delim", delim = " ") %>%
+    mutate(sex = sapply(male, function(x) if(x == 0.5) "male" else "female")) %>%
+    mutate(educ = factor(educ, levels = c("noHS", "HS", "some_or_assoc", "bach", "bachplus")))
 
 pstrat = function(df, predicted, ...) {
     predicted_quo = rlang::enquo(predicted)
@@ -39,17 +40,20 @@ ui <- fluidPage(
     # Sidebar with a slider input for number of bins 
     sidebarLayout(
         sidebarPanel(
+            selectInput('outcome', 'Outcome', c("Retrospective Economy", "President")),
+            selectInput('year', 'Plot Year', c("All", sort(unique(prediction_df$year)))),
             selectInput('factor1', 'Group by', c("Education", "Age", "Sex", "Race", "Marital Status", "State")),
-            selectInput('factor2', 'Group by', c("Ignore", "Education", "Age", "Sex", "Race", "Marital Status", "State")),
+            selectInput('factor2', 'Group by', c("Ignore", "Age", "Education", "Sex", "Race", "Marital Status", "State")),
             selectInput('factor3', 'Group by', c("Ignore", "Education", "Age", "Sex", "Race", "Marital Status", "State")),
             checkboxInput("summarize", label = "Summarize", value = TRUE),
-            actionButton("action", label = "Sample (reqs Summarize == False)")
+            checkboxInput("use_maps", label = "Use Maps", value = TRUE),
+            checkboxInput("free_y", label = "Freely scale y", value = FALSE),
+            actionButton("action", label = "Sample (reqs Summarize == False)"),
+            width = 2
         ),
 
         # Show a plot of the generated distribution
-        mainPanel(
-            plotOutput("distPlot", height = "800px")
-        )
+        mainPanel(plotOutput("distPlot", height = "800px"), width = 10)
     )
 )
 
@@ -57,6 +61,9 @@ ui <- fluidPage(
 server <- function(input, output, session) {
     output$distPlot <- renderPlot({
         input$action
+        
+        prediction_df_outcome_filtered = prediction_df %>%
+            filter(outcome == (if(input$outcome == "Retrospective Economy") "econ_better" else "approve_pres"))
         
         to_sym = function(fact) {
             if(fact == "Education") {
@@ -71,82 +78,54 @@ server <- function(input, output, session) {
                 return(rlang::sym("marstat"))
             } else if(fact == "State") {
                 return(rlang::sym("state"))
+            } else if(fact == "Year") {
+                return(rlang::sym("year"))
             }
         }
         
-        factors = setdiff(unique(c(input$factor1, input$factor2, input$factor3)), c("Ignore"))
-        state_factor = "State" %in% factors
-        if(state_factor == TRUE) {
-            factors = setdiff(factors, c("State"))
-            factor1 = to_sym("State")
+        if(input$year == 'All') {
+            do_time_series_plot = TRUE
+            prediction_df_time_filtered = prediction_df_outcome_filtered
         } else {
-            factor1 = to_sym(factors[1])
-            factors = as.vector(na.omit(factors[2:3]))
+            if(as.numeric(input$year) %in% unique(prediction_df_outcome_filtered$year)) {
+                do_time_series_plot = FALSE
+                    prediction_df_time_filtered = prediction_df_outcome_filtered %>%
+                    filter(year == as.numeric(input$year))
+            } else {
+                stop("Invalid year specified (report this error)")
+            }
         }
         
-        num_facet_factors = length(factors)
-        
-        which_rep = sample(unique(turnout_df$rep), 1)
-        
-        if(num_facet_factors == 0) {
-            scale_limits = turnout_df %>%
-                pstrat(predicted, !!factor1, rep) %>%
-                summarize(min = min(predicted),
-                          max = max(predicted)) %>%
-                unlist()
-            
-            qdf = turnout_df %>%
-                pstrat(predicted, !!factor1, rep) %>%
-                group_by(!!factor1) %>%
-                summarize(median = median(predicted),
-                          uq = quantile(predicted, 0.9),
-                          lq = quantile(predicted, 0.1))
-            
-            sdf = turnout_df %>%
-                filter(rep == which_rep) %>%
-                pstrat(predicted, !!factor1)
-        } else if(num_facet_factors == 1) {
-            factor2 = to_sym(factors[1])
-            
-            scale_limits = turnout_df %>%
-                pstrat(predicted, !!factor1, !!factor2, rep) %>%
-                summarize(min = min(predicted),
-                          max = max(predicted)) %>%
-                unlist()
-            
-            qdf = turnout_df %>%
-                pstrat(predicted, !!factor1, !!factor2, rep) %>%
-                group_by(!!factor1, !!factor2) %>%
-                summarize(median = median(predicted),
-                          uq = quantile(predicted, 0.9),
-                          lq = quantile(predicted, 0.1))
-            
-            sdf = turnout_df %>%
-                filter(rep == which_rep) %>%
-                pstrat(predicted, !!factor1, !!factor2)
-        } else if(num_facet_factors == 2) {
-            factor2 = to_sym(factors[1])
-            factor3 = to_sym(factors[2])
-            
-            scale_limits = turnout_df %>%
-                pstrat(predicted, !!factor1, !!factor2, !!factor3, rep) %>%
-                summarize(min = min(predicted),
-                          max = max(predicted)) %>%
-                unlist()
-            
-            qdf = turnout_df %>%
-                pstrat(predicted, !!factor1, !!factor2, !!factor3, rep) %>%
-                group_by(!!factor1, !!factor2, !!factor3) %>%
-                summarize(median = median(predicted),
-                          uq = quantile(predicted, 0.9),
-                          lq = quantile(predicted, 0.1))
-            
-            sdf = turnout_df %>%
-                filter(rep == which_rep) %>%
-                pstrat(predicted, !!factor1, !!factor2, !!factor3)
+        selected_factors = setdiff(unique(c(input$factor1, input$factor2, input$factor3)), c("Ignore"))
+        do_state_plot = ("State" %in% selected_factors) & (do_time_series_plot == FALSE)
+        if(do_state_plot == TRUE) {
+            selected_factors = c("State", setdiff(selected_factors, c("State")))
+        } else if(do_time_series_plot == TRUE) {
+            selected_factors = c("Year", selected_factors)
         }
         
-        if(state_factor == TRUE) {
+        factors = lapply(selected_factors, to_sym)
+        
+        which_rep = sample(unique(prediction_df_time_filtered$rep), 1)
+        
+        scale_limits = prediction_df_time_filtered %>%
+            pstrat(predicted, !!!factors, rep) %>%
+            summarize(min = min(predicted),
+                      max = max(predicted)) %>%
+            unlist()
+        
+        qdf = prediction_df_time_filtered %>%
+            pstrat(predicted, !!!factors, rep) %>%
+            group_by(!!!factors) %>%
+            summarize(median = median(predicted),
+                      uq = quantile(predicted, 0.9),
+                      lq = quantile(predicted, 0.1))
+        
+        sdf = prediction_df_time_filtered %>%
+            filter(rep == which_rep) %>%
+            pstrat(predicted, !!!factors)
+        
+        if(do_state_plot == TRUE & input$use_maps == TRUE) {
             if(input$summarize == FALSE) {
                 pdf = sdf %>%
                     rename(median = predicted)
@@ -170,29 +149,59 @@ server <- function(input, output, session) {
                       axis.title.y = element_blank(),
                       axis.text.y = element_blank(),
                       axis.ticks.y = element_blank())
+            
+            if(length(factors) == 2) {
+                p = p + facet_grid(rows = vars(!!factors[[2]]), labeller = "label_both")
+            } else if(length(factors) == 3) {
+                p = p + facet_grid(rows = vars(!!factors[[2]]),
+                                   cols = vars(!!factors[[3]]), labeller = "label_both")
+            }
         } else {
             p = qdf %>%
                 ggplot() +
-                geom_errorbar(aes(!!factor1, ymin = lq, ymax = uq, width = 0.0)) +
-                geom_point(aes(!!factor1, median)) +
-                ylim(scale_limits) +
-                theme(axis.text.x = element_text(angle=90, hjust=1)) +
+                #ylim(scale_limits) +
+                theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
                 ylab("Predicted")
-            
+
+            if(do_time_series_plot == FALSE) {
+                p = p + geom_errorbar(aes(!!factors[[1]], ymin = lq, ymax = uq, width = 0.0), position = position_dodge(width = 0.25)) +
+                    geom_point(aes(!!factors[[1]], median), position = position_dodge(width = 0.25))
+            } else {
+                p = p + geom_ribbon(aes(!!factors[[1]], ymin = lq, ymax = uq), alpha = 0.25, size = 0.0) +
+                    geom_point(aes(!!factors[[1]], median)) + 
+                    scale_x_continuous(breaks = qdf %>% pull(!!factors[[1]]) %>% unique)
+            }
+
             if(input$summarize == FALSE) {
-                p = p + geom_point(data = sdf,
-                                   aes(!!factor1, predicted), color = "red")
+                if(do_time_series_plot == FALSE) {
+                    p = p + geom_point(data = sdf,
+                                       aes(!!factors[[1]], predicted), shape = 4, position = position_dodge(width = 0.25))
+                } else {
+                    p = p + geom_point(data = sdf,
+                                       aes(!!factors[[1]], predicted), shape = 4)
+                }
+            }
+
+            scale_type = if(input$free_y) "free_y" else "fixed"
+            if(length(factors) == 2) {
+                p = p + aes(color = !!factors[[2]], fill = !!factors[[2]])
+            } else if(length(factors) == 3) {
+                p = p + aes(color = !!factors[[2]], fill = !!factors[[2]]) +
+                    facet_wrap(vars(!!factors[[3]]),
+                               nrow = qdf %>% pull(!!factors[[3]]) %>% unique %>% length,
+                               labeller = "label_both",
+                               scales = scale_type)
+            } else if(length(factors) == 4) {
+                p = p + aes(color = !!factors[[2]], fill = !!factors[[2]]) +
+                    facet_wrap(vars(!!!factors[3:4]),
+                               nrow = qdf %>% pull(!!factors[[3]]) %>% unique %>% length,
+                               ncol = qdf %>% pull(!!factors[[4]]) %>% unique %>% length,
+                               labeller = "label_both",
+                               scales = scale_type)
             }
         }
-        
-        if(num_facet_factors == 1) {
-            p = p + facet_grid(cols = vars(!!factor2))
-        } else if(num_facet_factors == 2) {
-            p = p + facet_grid(cols = vars(!!factor2),
-                               rows = vars(!!factor3))
-        }
-        
-        p + theme(text = element_text(size=20))
+
+        p + theme(text = element_text(size = 20))
     })
 }
 
